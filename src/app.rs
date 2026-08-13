@@ -7,7 +7,7 @@ use sysinfo::{Disks, Pid, System};
 pub const HISTORY_LEN: usize = 128;
 const MAX_PROCESSES: usize = 300;
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum SortKey {
     Cpu,
     Memory,
@@ -165,16 +165,7 @@ impl App {
             })
             .collect();
 
-        list.sort_by(|a, b| match self.sort {
-            SortKey::Cpu => b.cpu.partial_cmp(&a.cpu).unwrap_or(std::cmp::Ordering::Equal),
-            SortKey::Memory => b.mem.cmp(&a.mem),
-            SortKey::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-            SortKey::Pid => a.pid.cmp(&b.pid),
-        });
-
-        if self.sort_desc {
-            list.reverse();
-        }
+        sort_processes(&mut list, self.sort, self.sort_desc);
 
         self.processes = list.into_iter().take(MAX_PROCESSES).collect();
 
@@ -187,8 +178,7 @@ impl App {
         }
     }
 
-    pub fn move_selection(&mut self, delta: isize) {
-        if self.processes.is_empty() {
+    pub fn move_selection(&mut self, delta: isize) {        if self.processes.is_empty() {
             return;
         }
         let n = self.processes.len() as isize;
@@ -247,5 +237,90 @@ impl App {
 
     pub fn speed_down(&mut self) {
         self.interval_ms = (self.interval_ms * 2).clamp(200, 5000);
+    }
+}
+
+fn sort_processes(list: &mut [ProcessInfo], sort: SortKey, desc: bool) {
+    list.sort_by(|a, b| match sort {
+        SortKey::Cpu => a.cpu.partial_cmp(&b.cpu).unwrap_or(std::cmp::Ordering::Equal),
+        SortKey::Memory => a.mem.cmp(&b.mem),
+        SortKey::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+        SortKey::Pid => a.pid.cmp(&b.pid),
+    });
+    if desc {
+        list.reverse();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample() -> Vec<ProcessInfo> {
+        vec![
+            ProcessInfo { pid: 3, name: "Zebra".into(), cpu: 10.0, mem: 100, status: "R".into() },
+            ProcessInfo { pid: 1, name: "alpha".into(), cpu: 90.0, mem: 900, status: "S".into() },
+            ProcessInfo { pid: 2, name: "Beta".into(), cpu: 50.0, mem: 500, status: "T".into() },
+        ]
+    }
+
+    fn pids(list: &[ProcessInfo]) -> Vec<u32> {
+        list.iter().map(|p| p.pid).collect()
+    }
+
+    #[test]
+    fn cpu_sorted_descending_by_default() {
+        let mut list = sample();
+        sort_processes(&mut list, SortKey::Cpu, true);
+        assert_eq!(pids(&list), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn memory_sorted_descending() {
+        let mut list = sample();
+        sort_processes(&mut list, SortKey::Memory, true);
+        assert_eq!(pids(&list), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn name_sorted_ascending_case_insensitive() {
+        let mut list = sample();
+        sort_processes(&mut list, SortKey::Name, false);
+        assert_eq!(pids(&list), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn pid_sorted_ascending() {
+        let mut list = sample();
+        sort_processes(&mut list, SortKey::Pid, false);
+        assert_eq!(pids(&list), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn ascending_flips_order() {
+        let mut list = sample();
+        sort_processes(&mut list, SortKey::Cpu, false);
+        assert_eq!(pids(&list), vec![3, 2, 1]);
+    }
+
+    #[test]
+    fn cycle_sort_toggles_descending_only_for_numeric_keys() {
+        let mut app = App {
+            sort: SortKey::Cpu,
+            sort_desc: true,
+            ..Default::default()
+        };
+        app.cycle_sort();
+        assert_eq!(app.sort, SortKey::Memory);
+        assert!(app.sort_desc);
+        app.cycle_sort();
+        assert_eq!(app.sort, SortKey::Name);
+        assert!(!app.sort_desc);
+        app.cycle_sort();
+        assert_eq!(app.sort, SortKey::Pid);
+        assert!(!app.sort_desc);
+        app.cycle_sort();
+        assert_eq!(app.sort, SortKey::Cpu);
+        assert!(app.sort_desc);
     }
 }
