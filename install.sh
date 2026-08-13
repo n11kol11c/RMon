@@ -23,10 +23,10 @@ say "RMon installer"
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 case "$OS" in
-  Linux)   OS_NAME="Linux" ;;
-  Darwin)  OS_NAME="macOS" ;;
-  MINGW*|MSYS*|CYGWIN*) OS_NAME="Windows (Git Bash/MSYS)" ;;
-  *)       OS_NAME="$OS" ;;
+  Linux)   OS_NAME="Linux"; EXT="" ;;
+  Darwin)  OS_NAME="macOS"; EXT="" ;;
+  MINGW*|MSYS*|CYGWIN*) OS_NAME="Windows (Git Bash/MSYS)"; EXT=".exe" ;;
+  *)       OS_NAME="$OS"; EXT="" ;;
 esac
 say "Platform: ${BOLD}${OS_NAME}${RESET} / ${BOLD}${ARCH}${RESET}"
 
@@ -41,10 +41,10 @@ say "Building release binary..."
 )
 
 mkdir -p "$PREFIX"
-cp "$SCRIPT_DIR/target/release/$NAME" "$PREFIX/$NAME"
-chmod +x "$PREFIX/$NAME"
+cp "$SCRIPT_DIR/target/release/$NAME$EXT" "$PREFIX/$NAME$EXT"
+chmod +x "$PREFIX/$NAME$EXT"
 
-ok "Installed $NAME to ${BOLD}$PREFIX/$NAME${RESET}"
+ok "Installed $NAME to ${BOLD}$PREFIX/$NAME$EXT${RESET}"
 
 case ":$PATH:" in
   *":$PREFIX:"*) ok "$PREFIX is already on your PATH." ;;
