@@ -23,12 +23,16 @@ colored block characters.
 
 ### ✨ Features
 
-- 🔥 **Live CPU usage** — overall gauge, per-core bars, and a rolling history sparkline
+- 🔥 **Live CPU usage** — overall gauge, per-core bars, a rolling history sparkline, **and a real-time per-core line chart**
 - 🧠 **Memory & Swap** — used/free with color-coded gauges and sparkline
+- 🌐 **Network panel** — live upload/download speeds (per second) plus lifetime traffic totals
 - 💾 **Disk usage** — every mounted disk with usage bar, filesystem, and disk type
 - 📋 **Process list** — PID, CPU%, memory, status, and name, continuously refreshed
+- 🖱️ **Mouse support** — click a process row to select it, scroll the wheel to move the selection
+- 🎨 **Themes** — pick from 6 built-in themes (or define your own colors in a config file)
+- ⚙️ **Config file** — control theme, default sort order, refresh rate, and process-list size
 - ⌨️ **Fully keyboard-driven** — no mouse required (but we love you anyway)
-- 🎨 **Fancy terminal UI** — rounded panels, dark theme, color-coded urgency
+- 🎨 **Fancy terminal UI** — rounded panels, color-coded urgency
 - ⚡ **Adjustable refresh speed** — from 200 ms (adrenaline) to 5 s (zen mode)
 - 🧊 **Pause mode** — freeze the world when you need to stare at a number
 - 🔪 **Kill processes** — right from the keyboard, with a safety confirmation dialog
@@ -37,29 +41,32 @@ colored block characters.
 
 ## 🛠️ How It Works
 
-RMon is built on three battle-tested Rust crates:
+RMon is built on a handful of battle-tested Rust crates:
 
 | Crate | Job |
 |-------|-----|
-| [**sysinfo**](https://crates.io/crates/sysinfo) | Talks to the OS to fetch CPU, memory, disk, and process data on all three platforms |
-| [**ratatui**](https://crates.io/crates/ratatui) | Renders the fancy terminal UI — panels, gauges, sparklines, tables |
-| [**crossterm**](https://crates.io/crates/crossterm) | Handles raw-mode keyboard input and terminal size events |
+| [**sysinfo**](https://crates.io/crates/sysinfo) | Talks to the OS to fetch CPU, memory, disk, network, and process data on all three platforms |
+| [**ratatui**](https://crates.io/crates/ratatui) | Renders the fancy terminal UI — panels, gauges, charts, sparklines, tables |
+| [**crossterm**](https://crates.io/crates/crossterm) | Handles raw-mode keyboard *and mouse* input and terminal size events |
+| [**serde**](https://crates.io/crates/serde) + [**toml**](https://crates.io/crates/toml) | Parses your `config.toml` and theme colors |
 
-The architecture is cleanly split into four modules:
+The architecture is cleanly split into modules:
 
 ```
 src/
-├── main.rs      → Boots the terminal, runs the event/refresh loop
-├── app.rs       → The "brain": gathers system data, keeps UI state, sorts processes
-├── ui.rs        → The "eyes": draws every panel, gauge, bar, and table
-└── handlers.rs  → The "ears": maps every keypress to an action
+├── main.rs     → Boots the terminal (with mouse capture), runs the event/refresh loop
+├── app.rs      → The "brain": gathers system data, keeps UI state, sorts processes
+├── ui.rs       → The "eyes": draws every panel, gauge, chart, bar, and table
+├── handlers.rs → The "ears": maps every keypress and mouse event to an action
+├── config.rs   → Reads your TOML config file (theme, sort, refresh rate)
+└── theme.rs    → The 6 built-in themes + custom hex-color overrides
 ```
 
 **The loop** (it's simpler than it sounds):
 
-1. **Refresh** — `sysinfo` grabs fresh CPU, memory, disk, and process data (~every 1 s).
+1. **Refresh** — `sysinfo` grabs fresh CPU, memory, disk, network, and process data (~every 1 s).
 2. **Render** — `ratatui` redraws the dashboard with the new numbers.
-3. **Listen** — `crossterm` waits for your keypresses, so RMon is instant to interact with.
+3. **Listen** — `crossterm` waits for your keypresses and mouse moves, so RMon is instant to interact with.
 
 Repeat forever. That's it. That's the whole job. 💤
 
@@ -84,8 +91,8 @@ Repeat forever. That's it. That's the whole job. 💤
 
 **Recommended terminal setup:**
 
-- 🖥️ Minimum size **80 × 24** (the dashboard adapts to smaller sizes, but it gets cozy)
-- 🔤 A font with **box-drawing and block glyphs** (`█ ░ ▒ ▓ ─ │`) — most modern terminal fonts include these; Nerd Fonts look best
+- 🖥️ Minimum size **80 × 30** (the dashboard adapts to smaller sizes, but it gets cozy)
+- 🔤 A font with **box-drawing, block, and braille glyphs** (`█ ░ ▒ ▓ ─ │ ⣿`) — most modern terminal fonts include these; Nerd Fonts look best
 - 🌈 **Truecolor / 256-color** enabled for the full fancy experience (RMon falls back gracefully if not)
 
 **Build resources (only needed if building from source):**
@@ -155,12 +162,77 @@ That's it. The dashboard appears and starts live-refreshing. Now take control:
 | `+` / `]` | 🐇 Speed up refresh (down to 200 ms) |
 | `r` | 🔄 Force an immediate refresh |
 
+**Mouse:**
+
+| Action | Effect |
+|--------|--------|
+| 🖱️ Click a row in the process table | Select that process |
+| 🖱️ Scroll wheel up / down | Move the selection through the process list |
+
 **Pro tips:**
 
 - The gauge colors tell you how stressed things are:
   🟢 green = chill · 🟡 yellow = getting warm · 🔴 red = panic mode
 - Sort by **Memory** and pause (`p`) to catch that sneaky RAM hog in the act.
+- The per-core line chart under CPU shows every core's last ~2 minutes of history.
 - The sparklines under CPU/Memory show your last ~2 minutes of activity.
+
+---
+
+## ⚙️ Configuration
+
+RMon reads a TOML config file on startup, if one exists:
+
+| Platform | Location |
+|----------|----------|
+| 🍎 macOS / 🐧 Linux | `~/.config/rmon/config.toml` (or `$XDG_CONFIG_HOME/rmon/config.toml`) |
+| 🪟 Windows | `%APPDATA%\rmon\config.toml` |
+
+You can point it anywhere with the `RMON_CONFIG` env var:
+
+```bash
+RMON_CONFIG="$HOME/my-rmon.toml" rmon
+```
+
+### Example config
+
+```toml
+[monitor]
+refresh_ms = 1000   # refresh every second (200–5000)
+sort = "cpu"        # default sort: cpu | memory | name | pid
+max_processes = 300 # how many processes the table shows
+
+[theme]
+name = "dracula"    # see theme list below
+```
+
+### 🎨 Themes
+
+RMon ships with **6 built-in themes** — set one with `name`:
+
+`dark` · `light` · `gruvbox` · `dracula` · `solarized` · `nord`
+
+Want your own colors? Leave `name` out (or keep it as a base) and override any
+slot with hex values:
+
+```toml
+[theme]
+name = "dark"
+
+[theme.colors]
+bg     = "#0d1117"
+panel  = "#161b22"
+accent = "#58a6ff"
+title  = "#79c0ff"
+text   = "#c9d1d9"
+dim    = "#8b949e"
+ok     = "#3fb950"
+warn   = "#d29922"
+danger = "#f85149"
+```
+
+Any field you omit keeps the theme's default. Bad hex values or unknown theme
+names are ignored (with a warning) and RMon falls back to `dark`.
 
 ---
 
@@ -208,9 +280,11 @@ cargo uninstall rmon
 |---------|-----|
 | `rmon: command not found` | `~/.local/bin` isn't on your `PATH`. Add it (the installer prints how) or use the full path. |
 | Everything looks like a wall of boxes | Your terminal font is missing block glyphs. Try a Nerd Font or any modern terminal font. |
+| The per-core chart is just dots | Braille glyphs (`⣿`) missing from your font — same fix as above. |
 | CPU shows 0% on the first frame | Normal — RMon needs two samples to compute usage. It corrects itself on the next tick. |
-| Terminal looks scrambled after an accident | RMon always restores your terminal on exit. If something weird happens, just run `reset`. |
+| Terminal looks scrambled after an accident | RMon always restores your terminal (including mouse capture) on exit and on panics. If something weird happens, just run `reset`. |
 | You can't kill a process | Some processes need elevated privileges. That's the OS protecting itself — and occasionally you. |
+| My config file is ignored | Double-check the path (see the Configuration section), or set `RMON_CONFIG` to force a location. Invalid TOML prints a warning at startup and falls back to defaults. |
 
 ---
 
@@ -219,10 +293,15 @@ cargo uninstall rmon
 - [x] CPU, memory, disk, and process monitoring
 - [x] Keyboard navigation + process kill
 - [x] Live sparkline graphs
-- [ ] Per-core graph history (proper line charts)
-- [ ] Network upload/download speed panel
-- [ ] Config file for colors, sorting, and refresh rate
-- [ ] Mouse support
+- [x] Per-core graph history (proper line charts)
+- [x] Network upload/download speed panel
+- [x] Config file for colors, sorting, and refresh rate
+- [x] Mouse support
+- [x] Themes
+- [ ] Process search / filtering
+- [ ] Per-network-interface breakdown
+- [ ] GPU and temperature sensors
+- [ ] Custom keybindings
 
 ---
 
