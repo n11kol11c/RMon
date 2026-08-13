@@ -431,7 +431,7 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_confirm(frame: &mut Frame, app: &App, area: Rect) {
-    let w = area.width.clamp(40, 56);
+    let w = area.width.min(56);
     let h = 8;
     let x = area.x + area.width.saturating_sub(w) / 2;
     let y = area.y + area.height.saturating_sub(h) / 2;
@@ -512,5 +512,36 @@ fn format_uptime(secs: u64) -> String {
         format!("{h}h {m}m")
     } else {
         format!("{m}m")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn human_bytes_scales_units() {
+        assert_eq!(human_bytes(0), "0.0 B");
+        assert_eq!(human_bytes(1023), "1023.0 B");
+        assert_eq!(human_bytes(1024), "1.0 KB");
+        assert_eq!(human_bytes(3 * 1024 * 1024), "3.0 MB");
+        assert_eq!(human_bytes(2 * 1024 * 1024 * 1024), "2.0 GB");
+    }
+
+    #[test]
+    fn uptime_formats_units() {
+        assert_eq!(format_uptime(45), "0m");
+        assert_eq!(format_uptime(3600), "1h 0m");
+        assert_eq!(format_uptime(86400), "1d 0h 0m");
+        assert_eq!(format_uptime(90061), "1d 1h 1m");
+    }
+
+    #[test]
+    fn usage_color_thresholds() {
+        assert_eq!(usage_color(0.0), OK);
+        assert_eq!(usage_color(49.0), OK);
+        assert_eq!(usage_color(50.0), WARN);
+        assert_eq!(usage_color(79.0), WARN);
+        assert_eq!(usage_color(80.0), DANGER);
     }
 }
