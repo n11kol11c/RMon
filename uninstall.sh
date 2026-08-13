@@ -3,7 +3,11 @@ set -euo pipefail
 
 NAME="rmon"
 PREFIX="${PREFIX:-$HOME/.local/bin}"
-BIN="$PREFIX/$NAME"
+EXT=""
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) EXT=".exe" ;;
+esac
+BIN="$PREFIX/$NAME$EXT"
 
 GREEN=$'\033[32m'
 CYAN=$'\033[36m'
