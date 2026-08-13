@@ -1,11 +1,15 @@
 use std::collections::VecDeque;
+use std::str::FromStr;
 use std::time::Instant;
 
+use ratatui::layout::Rect;
 use ratatui::widgets::TableState;
-use sysinfo::{Disks, Pid, System};
+use sysinfo::{Disks, Networks, Pid, System};
+
+use crate::config::Config;
+use crate::theme::{self, Theme};
 
 pub const HISTORY_LEN: usize = 128;
-const MAX_PROCESSES: usize = 300;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum SortKey {
@@ -22,6 +26,24 @@ impl SortKey {
             SortKey::Memory => "MEM",
             SortKey::Name => "NAME",
             SortKey::Pid => "PID",
+        }
+    }
+
+    pub fn is_numeric(self) -> bool {
+        matches!(self, SortKey::Cpu | SortKey::Memory)
+    }
+}
+
+impl FromStr for SortKey {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "cpu" => Ok(SortKey::Cpu),
+            "memory" | "mem" => Ok(SortKey::Memory),
+            "name" => Ok(SortKey::Name),
+            "pid" => Ok(SortKey::Pid),
+            _ => Err(()),
         }
     }
 }
@@ -46,21 +68,31 @@ pub struct DiskInfo {
 pub struct App {
     pub system: System,
     pub disks: Disks,
+    pub networks: Networks,
+    pub theme: Theme,
     pub cpu_usage: f32,
     pub cores: Vec<f32>,
     pub cpu_history: VecDeque<u64>,
     pub memory_history: VecDeque<u64>,
+    pub core_history: Vec<VecDeque<u64>>,
     pub disk_info: Vec<DiskInfo>,
     pub processes: Vec<ProcessInfo>,
+    pub max_processes: usize,
     pub process_count: usize,
     pub process_state: TableState,
+    pub table_area: Option<Rect>,
     pub sort: SortKey,
     pub sort_desc: bool,
     pub should_quit: bool,
     pub paused: bool,
     pub interval_ms: u64,
     pub confirm: Option<(u32, String)>,
+    pub net_down_speed: u64,
+    pub net_up_speed: u64,
+    pub net_down_total: u64,
+    pub net_up_total: u64,
     last_refresh: Instant,
+    last_net_time: Instant,
 }
 
 impl Default for App {
@@ -71,27 +103,79 @@ impl Default for App {
 
 impl App {
     pub fn new() -> Self {
+        Self::with_config(Config::default())
+    }
+
+    pub fn with_config(cfg: Config) -> Self {
+        let mut sort = SortKey::Cpu;
+        let mut refresh_ms = 1000u64;
+        let mut max_procs = 300usize;
+
+        if let Some(file) = &cfg.file {
+            if let Some(mon) = &file.monitor {
+                if let Some(s) = &mon.sort {
+                    if let Ok(k) = s.parse::<SortKey>() {
+                        sort = k;
+                    }
+                }
+                if let Some(ms) = mon.refresh_ms {
+                    refresh_ms = ms;
+                }
+                if let Some(mp) = mon.max_processes {
+                    max_procs = mp;
+                }
+            }
+        }
+        let sort_desc = sort.is_numeric();
+
+        let theme = cfg
+            .file
+            .as_ref()
+            .and_then(|f| f.theme.as_ref())
+            .map(|t| theme::resolve(t.name.as_deref(), t.colors.as_ref()))
+            .unwrap_or_else(theme::dark);
+
+        if let Some(name) = cfg.file.as_ref().and_then(|f| f.theme.as_ref()).and_then(|t| t.name.as_deref()) {
+            if theme::from_name(name).is_none() {
+                eprintln!(
+                    "rmon: unknown theme '{name}', using dark (available: {})",
+                    theme::all_names()
+                );
+            }
+        }
+
         let system = System::new_all();
         let disks = Disks::new_with_refreshed_list();
+        let networks = Networks::new_with_refreshed_list();
 
         let mut app = App {
             system,
             disks,
+            networks,
+            theme,
             cpu_usage: 0.0,
             cores: Vec::new(),
             cpu_history: VecDeque::new(),
             memory_history: VecDeque::new(),
+            core_history: Vec::new(),
             disk_info: Vec::new(),
             processes: Vec::new(),
+            max_processes: max_procs.max(1),
             process_count: 0,
             process_state: TableState::default(),
-            sort: SortKey::Cpu,
-            sort_desc: true,
+            table_area: None,
+            sort,
+            sort_desc,
             should_quit: false,
             paused: false,
-            interval_ms: 1000,
+            interval_ms: refresh_ms.clamp(200, 5000),
             confirm: None,
+            net_down_speed: 0,
+            net_up_speed: 0,
+            net_down_total: 0,
+            net_up_total: 0,
             last_refresh: Instant::now(),
+            last_net_time: Instant::now(),
         };
 
         // Two refreshes with a small delay so CPU usage has a meaningful
@@ -105,6 +189,7 @@ impl App {
     pub fn refresh(&mut self) {
         self.system.refresh_all();
         self.disks.refresh();
+        self.networks.refresh();
 
         self.cpu_usage = self.system.global_cpu_usage();
         self.cores = self.system.cpus().iter().map(|c| c.cpu_usage()).collect();
@@ -113,6 +198,7 @@ impl App {
         self.update_history();
         self.update_disks();
         self.update_processes();
+        self.update_network();
 
         self.last_refresh = Instant::now();
     }
@@ -133,6 +219,17 @@ impl App {
         if self.memory_history.len() > HISTORY_LEN {
             self.memory_history.pop_front();
         }
+
+        if self.core_history.len() != self.cores.len() {
+            self.core_history = self.cores.iter().map(|_| VecDeque::new()).collect();
+        }
+        for (i, hist) in self.core_history.iter_mut().enumerate() {
+            let usage = self.cores.get(i).copied().unwrap_or(0.0).clamp(0.0, 100.0) as u64;
+            hist.push_back(usage);
+            if hist.len() > HISTORY_LEN {
+                hist.pop_front();
+            }
+        }
     }
 
     fn update_disks(&mut self) {
@@ -151,6 +248,39 @@ impl App {
         }
     }
 
+    fn update_network(&mut self) {
+        let down = self
+            .networks
+            .list()
+            .values()
+            .map(|n| n.received())
+            .sum::<u64>();
+        let up = self
+            .networks
+            .list()
+            .values()
+            .map(|n| n.transmitted())
+            .sum::<u64>();
+
+        let now = Instant::now();
+        let secs = now.duration_since(self.last_net_time).as_secs_f64();
+        self.last_net_time = now;
+        self.net_down_speed = if secs > 0.0 { (down as f64 / secs) as u64 } else { 0 };
+        self.net_up_speed = if secs > 0.0 { (up as f64 / secs) as u64 } else { 0 };
+        self.net_down_total = self
+            .networks
+            .list()
+            .values()
+            .map(|n| n.total_received())
+            .sum();
+        self.net_up_total = self
+            .networks
+            .list()
+            .values()
+            .map(|n| n.total_transmitted())
+            .sum();
+    }
+
     fn update_processes(&mut self) {
         let mut list: Vec<ProcessInfo> = self
             .system
@@ -167,7 +297,7 @@ impl App {
 
         sort_processes(&mut list, self.sort, self.sort_desc);
 
-        self.processes = list.into_iter().take(MAX_PROCESSES).collect();
+        self.processes = list.into_iter().take(self.max_processes).collect();
 
         let selected = self.process_state.selected().unwrap_or(0);
         if !self.processes.is_empty() {
@@ -178,7 +308,8 @@ impl App {
         }
     }
 
-    pub fn move_selection(&mut self, delta: isize) {        if self.processes.is_empty() {
+    pub fn move_selection(&mut self, delta: isize) {
+        if self.processes.is_empty() {
             return;
         }
         let n = self.processes.len() as isize;
@@ -227,7 +358,7 @@ impl App {
             SortKey::Name => SortKey::Pid,
             SortKey::Pid => SortKey::Cpu,
         };
-        self.sort_desc = !matches!(self.sort, SortKey::Name | SortKey::Pid);
+        self.sort_desc = self.sort.is_numeric();
         self.update_processes();
     }
 
@@ -322,5 +453,42 @@ mod tests {
         app.cycle_sort();
         assert_eq!(app.sort, SortKey::Cpu);
         assert!(app.sort_desc);
+    }
+
+    #[test]
+    fn sort_key_parsing() {
+        assert_eq!("cpu".parse(), Ok(SortKey::Cpu));
+        assert_eq!("MEM".parse(), Ok(SortKey::Memory));
+        assert_eq!("name".parse(), Ok(SortKey::Name));
+        assert_eq!("pid".parse(), Ok(SortKey::Pid));
+        assert_eq!("bogus".parse::<SortKey>(), Err(()));
+        assert!(SortKey::Cpu.is_numeric());
+        assert!(!SortKey::Name.is_numeric());
+    }
+
+    #[test]
+    fn config_applies_sort_refresh_and_theme() {
+        use crate::config::{Config, ConfigFile, MonitorSection, ThemeSection};
+
+        let cfg = Config {
+            file: Some(ConfigFile {
+                theme: Some(ThemeSection {
+                    name: Some("nord".into()),
+                    colors: None,
+                }),
+                monitor: Some(MonitorSection {
+                    refresh_ms: Some(250),
+                    sort: Some("name".into()),
+                    max_processes: Some(50),
+                }),
+            }),
+            path: None,
+        };
+        let app = App::with_config(cfg);
+        assert_eq!(app.sort, SortKey::Name);
+        assert!(!app.sort_desc);
+        assert_eq!(app.interval_ms, 250);
+        assert_eq!(app.max_processes, 50);
+        assert_eq!(app.theme.name, "nord");
     }
 }
